@@ -1,4 +1,4 @@
-基于上游 gwitko/Conduit v1.4.14+39 (commit 9cd2ff9) 的私人修改版。
+基于上游 gwitko/Conduit v1.4.14+39 (commit 9cd2ff9) 的修改版。
 
 ## 改动
 1. 去掉进入 App 的锁屏密码（App Lock）。
