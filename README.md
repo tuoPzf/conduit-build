@@ -1,7 +1,7 @@
-# Conduit（私人自用修改版）
+# Conduit（修改版）
 
 基于 [gwitko/Conduit](https://github.com/gwitko/Conduit) `v1.4.14+39`（commit
-`9cd2ff9174e4ee8e9f0679d1da6aa4aa0edcf742`）的私人修改版。
+`9cd2ff9174e4ee8e9f0679d1da6aa4aa0edcf742`）的修改版。
 
 ## 下载安装
 
