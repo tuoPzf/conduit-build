@@ -2,6 +2,13 @@ name: Build Conduit APK
 
 on:
   push:
+    paths-ignore:
+      - 'source/**'
+      - 'conduit_vt/**'
+      - 'apk/**'
+      - 'patches/**'
+      - '**.md'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:
