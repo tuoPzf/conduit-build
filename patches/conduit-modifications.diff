@@ -1,0 +1,1013 @@
+diff -ruN a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+--- a/android/app/src/main/AndroidManifest.xml	2026-09-22 08:09:11.911722995 +0800
++++ b/android/app/src/main/AndroidManifest.xml	2026-09-22 08:09:50.698119360 +0800
+@@ -1,7 +1,6 @@
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+     <uses-permission android:name="android.permission.INTERNET" />
+     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+-    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+diff -ruN a/ios/Runner/Info.plist b/ios/Runner/Info.plist
+--- a/ios/Runner/Info.plist	2026-09-22 08:09:12.355727499 +0800
++++ b/ios/Runner/Info.plist	2026-09-22 08:09:50.698119360 +0800
+@@ -24,8 +24,6 @@
+ 	<array>
+ 		<string>A0000006472F0001</string>
+ 	</array>
+-	<key>NSFaceIDUsageDescription</key>
+-	<string>Conduit uses Face ID to protect saved SSH machines and credentials.</string>
+ 	<key>NSPhotoLibraryUsageDescription</key>
+ 	<string>Conduit lets you choose files and photos to upload to remote machines over SFTP.</string>
+ 	<key>NSCameraUsageDescription</key>
+diff -ruN a/lib/core/presentation/secret_text_controller.dart b/lib/core/presentation/secret_text_controller.dart
+--- a/lib/core/presentation/secret_text_controller.dart	1970-01-01 08:00:00.000000000 +0800
++++ b/lib/core/presentation/secret_text_controller.dart	2026-09-22 08:09:55.253166394 +0800
+@@ -0,0 +1,40 @@
++import 'package:flutter/material.dart';
++
++/// A [TextEditingController] that hides its text by rendering bullets itself,
++/// instead of using the platform password input type.
++///
++/// Android ROMs such as MIUI/HyperOS and EMUI/HarmonyOS force their own
++/// "secure keyboard" whenever an editor is marked as a password field, which
++/// blocks third-party IMEs and Chinese input. Rendering the mask in Dart keeps
++/// the platform input type as plain text so the user's own keyboard is used.
++class SecretTextController extends TextEditingController {
++  SecretTextController({super.text});
++
++  bool _hidden = true;
++
++  bool get hidden => _hidden;
++
++  set hidden(bool value) {
++    if (_hidden == value) {
++      return;
++    }
++    _hidden = value;
++    notifyListeners();
++  }
++
++  @override
++  TextSpan buildTextSpan({
++    required BuildContext context,
++    TextStyle? style,
++    required bool withComposing,
++  }) {
++    if (!_hidden) {
++      return super.buildTextSpan(
++        context: context,
++        style: style,
++        withComposing: withComposing,
++      );
++    }
++    return TextSpan(style: style, text: '\u2022' * value.text.length);
++  }
++}
+diff -ruN a/lib/features/app_lock/data/local_app_authenticator.dart b/lib/features/app_lock/data/local_app_authenticator.dart
+--- a/lib/features/app_lock/data/local_app_authenticator.dart	2026-09-22 08:09:21.170816917 +0800
++++ b/lib/features/app_lock/data/local_app_authenticator.dart	1970-01-01 08:00:00.000000000 +0800
+@@ -1,33 +0,0 @@
+-import 'package:conduit/features/app_lock/domain/app_authenticator.dart';
+-import 'package:flutter/services.dart';
+-import 'package:local_auth/local_auth.dart';
+-
+-class LocalAppAuthenticator implements AppAuthenticator {
+-  LocalAppAuthenticator({LocalAuthentication? localAuthentication})
+-    : _localAuthentication = localAuthentication ?? LocalAuthentication();
+-
+-  final LocalAuthentication _localAuthentication;
+-
+-  @override
+-  Future<bool> canAuthenticate() async {
+-    try {
+-      return await _localAuthentication.isDeviceSupported();
+-    } on PlatformException {
+-      return false;
+-    }
+-  }
+-
+-  @override
+-  Future<AppAuthenticationResult> authenticate() async {
+-    try {
+-      final authenticated = await _localAuthentication.authenticate(
+-        localizedReason: 'Unlock Conduit to access saved SSH machines.',
+-      );
+-      return authenticated
+-          ? AppAuthenticationResult.success
+-          : AppAuthenticationResult.cancelled;
+-    } on PlatformException {
+-      return AppAuthenticationResult.unavailable;
+-    }
+-  }
+-}
+diff -ruN a/lib/features/app_lock/domain/app_authenticator.dart b/lib/features/app_lock/domain/app_authenticator.dart
+--- a/lib/features/app_lock/domain/app_authenticator.dart	2026-09-22 08:09:21.633821614 +0800
++++ b/lib/features/app_lock/domain/app_authenticator.dart	1970-01-01 08:00:00.000000000 +0800
+@@ -1,7 +0,0 @@
+-enum AppAuthenticationResult { success, cancelled, unavailable }
+-
+-abstract interface class AppAuthenticator {
+-  Future<bool> canAuthenticate();
+-
+-  Future<AppAuthenticationResult> authenticate();
+-}
+diff -ruN a/lib/features/app_lock/presentation/app_lock_controller.dart b/lib/features/app_lock/presentation/app_lock_controller.dart
+--- a/lib/features/app_lock/presentation/app_lock_controller.dart	2026-09-22 08:09:22.083826179 +0800
++++ b/lib/features/app_lock/presentation/app_lock_controller.dart	1970-01-01 08:00:00.000000000 +0800
+@@ -1,83 +0,0 @@
+-import 'package:conduit/features/app_lock/domain/app_authenticator.dart';
+-import 'package:flutter/foundation.dart';
+-
+-enum AppLockStatus { locked, checking, unlocked, unavailable }
+-
+-class AppLockController extends ChangeNotifier {
+-  AppLockController(this._authenticator);
+-
+-  final AppAuthenticator _authenticator;
+-
+-  AppLockStatus _status = AppLockStatus.locked;
+-  String? _message;
+-
+-  AppLockStatus get status => _status;
+-  String? get message => _message;
+-  bool get isUnlocked => _status == AppLockStatus.unlocked;
+-
+-  Future<void> unlock() async {
+-    if (_status == AppLockStatus.checking) {
+-      return;
+-    }
+-
+-    _status = AppLockStatus.checking;
+-    _message = null;
+-    notifyListeners();
+-
+-    final canAuthenticate = await _canAuthenticate();
+-    if (!canAuthenticate) {
+-      _status = AppLockStatus.unavailable;
+-      _message =
+-          'Device authentication is not configured. '
+-          'Set a screen lock to keep saved hosts private.';
+-      notifyListeners();
+-      return;
+-    }
+-
+-    final result = await _authenticate();
+-    switch (result) {
+-      case AppAuthenticationResult.success:
+-        _status = AppLockStatus.unlocked;
+-        _message = null;
+-      case AppAuthenticationResult.cancelled:
+-        _status = AppLockStatus.locked;
+-        _message = 'Authentication was cancelled.';
+-      case AppAuthenticationResult.unavailable:
+-        _status = AppLockStatus.unavailable;
+-        _message =
+-            'Device authentication is unavailable on this device. '
+-            'Set a screen lock for better protection.';
+-    }
+-    notifyListeners();
+-  }
+-
+-  Future<bool> _canAuthenticate() async {
+-    try {
+-      return await _authenticator.canAuthenticate();
+-    } catch (_) {
+-      return false;
+-    }
+-  }
+-
+-  Future<AppAuthenticationResult> _authenticate() async {
+-    try {
+-      return await _authenticator.authenticate();
+-    } catch (_) {
+-      return AppAuthenticationResult.cancelled;
+-    }
+-  }
+-
+-  void continueWithoutAuth() {
+-    if (_status != AppLockStatus.unavailable) {
+-      return;
+-    }
+-    _status = AppLockStatus.unlocked;
+-    notifyListeners();
+-  }
+-
+-  void lock() {
+-    _status = AppLockStatus.locked;
+-    _message = null;
+-    notifyListeners();
+-  }
+-}
+diff -ruN a/lib/features/app_lock/presentation/lock_page.dart b/lib/features/app_lock/presentation/lock_page.dart
+--- a/lib/features/app_lock/presentation/lock_page.dart	2026-09-22 08:09:22.552830936 +0800
++++ b/lib/features/app_lock/presentation/lock_page.dart	1970-01-01 08:00:00.000000000 +0800
+@@ -1,209 +0,0 @@
+-import 'package:conduit/core/presentation/conduit_brand.dart';
+-import 'package:conduit/core/presentation/system_navigation_insets.dart';
+-import 'package:conduit/core/presentation/theme_sheet.dart';
+-import 'package:conduit/core/theme/app_palette.dart';
+-import 'package:conduit/core/theme/theme_controller.dart';
+-import 'package:conduit/features/app_lock/presentation/app_lock_controller.dart';
+-import 'package:flutter/material.dart';
+-
+-class LockPage extends StatefulWidget {
+-  const LockPage({
+-    required this.controller,
+-    required this.themeController,
+-    super.key,
+-  });
+-
+-  final AppLockController controller;
+-  final ThemeController themeController;
+-
+-  @override
+-  State<LockPage> createState() => _LockPageState();
+-}
+-
+-class _LockPageState extends State<LockPage> {
+-  @override
+-  void initState() {
+-    super.initState();
+-    WidgetsBinding.instance.addPostFrameCallback(
+-      (_) => widget.controller.unlock(),
+-    );
+-  }
+-
+-  @override
+-  Widget build(BuildContext context) {
+-    return ListenableBuilder(
+-      listenable: Listenable.merge([widget.controller, widget.themeController]),
+-      builder: (context, _) {
+-        final status = widget.controller.status;
+-        final checking = status == AppLockStatus.checking;
+-        final unavailable = status == AppLockStatus.unavailable;
+-        final theme = Theme.of(context);
+-        final colorScheme = theme.colorScheme;
+-        final palette = widget.themeController.palette;
+-
+-        return Scaffold(
+-          body: ConduitBackdrop(
+-            palette: palette,
+-            child: SafeArea(
+-              bottom: shouldApplyBottomSafeArea(context),
+-              child: Stack(
+-                children: [
+-                  Align(
+-                    alignment: Alignment.topRight,
+-                    child: Padding(
+-                      padding: const EdgeInsets.all(14),
+-                      child: IconButton(
+-                        tooltip: 'Appearance',
+-                        icon: const Icon(Icons.palette_outlined),
+-                        color: colorScheme.onSurfaceVariant,
+-                        onPressed: () => showThemeSheet(
+-                          context: context,
+-                          controller: widget.themeController,
+-                        ),
+-                      ),
+-                    ),
+-                  ),
+-                  Center(
+-                    child: Padding(
+-                      padding: const EdgeInsets.all(24),
+-                      child: ConstrainedBox(
+-                        constraints: const BoxConstraints(maxWidth: 380),
+-                        child: Column(
+-                          mainAxisSize: MainAxisSize.min,
+-                          children: [
+-                            _UnlockHero(
+-                              palette: palette,
+-                              checking: checking,
+-                              unavailable: unavailable,
+-                            ),
+-                            const SizedBox(height: 32),
+-                            const ConduitWordmark(size: 36),
+-                            const SizedBox(height: 14),
+-                            Text(
+-                              widget.controller.message ??
+-                                  'Private SSH workspaces, protected locally.',
+-                              textAlign: TextAlign.center,
+-                              style: theme.textTheme.bodyMedium?.copyWith(
+-                                color: unavailable
+-                                    ? colorScheme.error
+-                                    : colorScheme.onSurfaceVariant,
+-                              ),
+-                            ),
+-                            const SizedBox(height: 32),
+-                            SizedBox(
+-                              width: double.infinity,
+-                              child: FilledButton.icon(
+-                                onPressed: checking
+-                                    ? null
+-                                    : widget.controller.unlock,
+-                                icon: checking
+-                                    ? SizedBox.square(
+-                                        dimension: 18,
+-                                        child: CircularProgressIndicator(
+-                                          strokeWidth: 2.4,
+-                                          color: colorScheme.onPrimary,
+-                                        ),
+-                                      )
+-                                    : const Icon(Icons.lock_open_rounded),
+-                                label: Text(unavailable ? 'Retry' : 'Unlock'),
+-                              ),
+-                            ),
+-                            if (unavailable) ...[
+-                              const SizedBox(height: 10),
+-                              SizedBox(
+-                                width: double.infinity,
+-                                child: OutlinedButton(
+-                                  onPressed:
+-                                      widget.controller.continueWithoutAuth,
+-                                  child: const Text('Continue without auth'),
+-                                ),
+-                              ),
+-                            ],
+-                          ],
+-                        ),
+-                      ),
+-                    ),
+-                  ),
+-                  Align(
+-                    alignment: Alignment.bottomCenter,
+-                    child: Padding(
+-                      padding: const EdgeInsets.only(bottom: 16),
+-                      child: Text(
+-                        'Encrypted SSH sessions • zero cloud sync',
+-                        style: theme.textTheme.labelSmall?.copyWith(
+-                          color: colorScheme.onSurfaceVariant,
+-                        ),
+-                      ),
+-                    ),
+-                  ),
+-                ],
+-              ),
+-            ),
+-          ),
+-        );
+-      },
+-    );
+-  }
+-}
+-
+-class _UnlockHero extends StatelessWidget {
+-  const _UnlockHero({
+-    required this.palette,
+-    required this.checking,
+-    required this.unavailable,
+-  });
+-
+-  final AppPalette palette;
+-  final bool checking;
+-  final bool unavailable;
+-
+-  @override
+-  Widget build(BuildContext context) {
+-    final colorScheme = Theme.of(context).colorScheme;
+-    final brightness = Theme.of(context).brightness;
+-    final ring = unavailable ? colorScheme.error : palette.accent;
+-
+-    return SizedBox(
+-      width: 140,
+-      height: 140,
+-      child: Stack(
+-        alignment: Alignment.center,
+-        children: [
+-          Container(
+-            width: 140,
+-            height: 140,
+-            decoration: BoxDecoration(
+-              shape: BoxShape.circle,
+-              gradient: SweepGradient(
+-                colors: [
+-                  ring.withValues(alpha: 0.0),
+-                  ring.withValues(alpha: 0.7),
+-                  ring.withValues(alpha: 0.0),
+-                ],
+-                stops: const [0.0, 0.5, 1.0],
+-              ),
+-            ),
+-          ),
+-          Container(
+-            width: 124,
+-            height: 124,
+-            decoration: BoxDecoration(
+-              shape: BoxShape.circle,
+-              color: palette.panelFor(brightness),
+-              border: Border.all(color: palette.hairlineFor(brightness)),
+-            ),
+-            child: Center(
+-              child: Icon(
+-                unavailable
+-                    ? Icons.gpp_maybe_outlined
+-                    : (checking ? Icons.hourglass_top : Icons.fingerprint),
+-                size: 56,
+-                color: ring,
+-              ),
+-            ),
+-          ),
+-        ],
+-      ),
+-    );
+-  }
+-}
+diff -ruN a/lib/features/backup/presentation/backup_sheet.dart b/lib/features/backup/presentation/backup_sheet.dart
+--- a/lib/features/backup/presentation/backup_sheet.dart	2026-09-22 08:09:18.340788210 +0800
++++ b/lib/features/backup/presentation/backup_sheet.dart	2026-09-22 08:10:02.758243890 +0800
+@@ -1,6 +1,7 @@
+ import 'dart:async';
+ import 'dart:typed_data';
+ 
++import 'package:conduit/core/presentation/secret_text_controller.dart';
+ import 'package:conduit/features/backup/data/app_backup_service.dart';
+ import 'package:file_picker/file_picker.dart';
+ import 'package:flutter/material.dart';
+@@ -243,8 +244,8 @@
+ }
+ 
+ class _BackupPasswordDialogState extends State<_BackupPasswordDialog> {
+-  final _passwordController = TextEditingController();
+-  final _confirmationController = TextEditingController();
++  final _passwordController = SecretTextController();
++  final _confirmationController = SecretTextController();
+   bool _obscure = true;
+   String? _error;
+ 
+@@ -268,14 +269,18 @@
+           ],
+           TextField(
+             controller: _passwordController,
+-            obscureText: _obscure,
++            obscureText: false,
+             autofocus: true,
+             decoration: InputDecoration(
+               labelText: 'Password',
+               errorText: _error,
+               suffixIcon: IconButton(
+                 tooltip: _obscure ? 'Show password' : 'Hide password',
+-                onPressed: () => setState(() => _obscure = !_obscure),
++                onPressed: () => setState(() {
++                  _obscure = !_obscure;
++                  _passwordController.hidden = _obscure;
++                  _confirmationController.hidden = _obscure;
++                }),
+                 icon: Icon(
+                   _obscure
+                       ? Icons.visibility_rounded
+@@ -289,7 +294,7 @@
+             const SizedBox(height: 12),
+             TextField(
+               controller: _confirmationController,
+-              obscureText: _obscure,
++              obscureText: false,
+               decoration: const InputDecoration(labelText: 'Confirm password'),
+               onSubmitted: (_) => _submit(),
+             ),
+diff -ruN a/lib/features/hosts/presentation/add_hardware_key_sheet.dart b/lib/features/hosts/presentation/add_hardware_key_sheet.dart
+--- a/lib/features/hosts/presentation/add_hardware_key_sheet.dart	2026-09-22 08:09:17.469779375 +0800
++++ b/lib/features/hosts/presentation/add_hardware_key_sheet.dart	2026-09-22 08:10:02.754243849 +0800
+@@ -2,6 +2,7 @@
+ import 'dart:convert';
+ 
+ import 'package:conduit/core/presentation/conduit_brand.dart';
++import 'package:conduit/core/presentation/secret_text_controller.dart';
+ import 'package:conduit/core/theme/app_theme.dart';
+ import 'package:conduit/features/hosts/domain/saved_host.dart';
+ import 'package:conduit/features/hosts/domain/ssh_key.dart';
+@@ -64,7 +65,7 @@
+ class _AddHardwareKeySheetState extends State<_AddHardwareKeySheet> {
+   final _stubController = TextEditingController();
+   final _labelController = TextEditingController();
+-  final _passphraseController = TextEditingController();
++  final _passphraseController = SecretTextController();
+   SshKeyInspection? _inspection;
+   String? _blockingError;
+   bool _showPassphrase = false;
+@@ -301,11 +302,13 @@
+                         ? Icons.visibility_off_outlined
+                         : Icons.visibility_outlined,
+                   ),
+-                  onPressed: () =>
+-                      setState(() => _showPassphrase = !_showPassphrase),
++                  onPressed: () => setState(() {
++                    _showPassphrase = !_showPassphrase;
++                    _passphraseController.hidden = !_showPassphrase;
++                  }),
+                 ),
+               ),
+-              obscureText: !_showPassphrase,
++              obscureText: false,
+             ),
+           ],
+           if (inspection?.status == SshKeyStatus.securityKeyStub) ...[
+diff -ruN a/lib/features/hosts/presentation/host_form_page.dart b/lib/features/hosts/presentation/host_form_page.dart
+--- a/lib/features/hosts/presentation/host_form_page.dart	2026-09-22 08:09:15.354757921 +0800
++++ b/lib/features/hosts/presentation/host_form_page.dart	2026-09-22 08:10:02.739243694 +0800
+@@ -2,6 +2,7 @@
+ import 'dart:convert';
+ 
+ import 'package:conduit/core/presentation/conduit_brand.dart';
++import 'package:conduit/core/presentation/secret_text_controller.dart';
+ import 'package:conduit/core/presentation/system_navigation_insets.dart';
+ import 'package:conduit/core/theme/theme_controller.dart';
+ import 'package:conduit/features/hosts/data/dartssh2_ssh_key_service.dart';
+@@ -40,9 +41,9 @@
+   final _hostController = TextEditingController();
+   final _portController = TextEditingController(text: '22');
+   final _usernameController = TextEditingController();
+-  final _passwordController = TextEditingController();
++  final _passwordController = SecretTextController();
+   final _privateKeyController = TextEditingController();
+-  final _passphraseController = TextEditingController();
++  final _passphraseController = SecretTextController();
+   final _tagController = TextEditingController();
+   final _timeoutController = TextEditingController(text: '12');
+   final _moshLocaleController = TextEditingController(text: 'C.UTF-8');
+@@ -263,10 +264,14 @@
+               requiredValidator: _required,
+               keyMaterialValidator: _validateKeyMaterial,
+               onAuthMethodChanged: _changeAuthMethod,
+-              onTogglePasswordVisibility: () =>
+-                  setState(() => _showPassword = !_showPassword),
+-              onTogglePassphraseVisibility: () =>
+-                  setState(() => _showPassphrase = !_showPassphrase),
++              onTogglePasswordVisibility: () => setState(() {
++                _showPassword = !_showPassword;
++                _passwordController.hidden = !_showPassword;
++              }),
++              onTogglePassphraseVisibility: () => setState(() {
++                _showPassphrase = !_showPassphrase;
++                _passphraseController.hidden = !_showPassphrase;
++              }),
+               onPasteKey: _pasteKey,
+               onImportKeyFile: _importKeyFile,
+               onGenerateKey: _generateKey,
+@@ -603,7 +608,7 @@
+     final commentController = TextEditingController(
+       text: username.isEmpty ? 'conduit' : '$username@conduit',
+     );
+-    final passphraseController = TextEditingController();
++    final passphraseController = SecretTextController();
+     return showDialog<({String comment, String passphrase})>(
+       context: context,
+       builder: (context) => AlertDialog(
+@@ -630,7 +635,7 @@
+             const SizedBox(height: 12),
+             TextField(
+               controller: passphraseController,
+-              obscureText: true,
++              obscureText: false,
+               decoration: const InputDecoration(
+                 labelText: 'Passphrase (optional)',
+                 helperText: 'Encrypts the private key. Leave empty for none.',
+diff -ruN a/lib/features/hosts/presentation/hosts_page.dart b/lib/features/hosts/presentation/hosts_page.dart
+--- a/lib/features/hosts/presentation/hosts_page.dart	2026-09-22 08:09:13.270736781 +0800
++++ b/lib/features/hosts/presentation/hosts_page.dart	2026-09-22 08:09:50.699119370 +0800
+@@ -4,7 +4,6 @@
+ import 'package:conduit/core/presentation/system_navigation_insets.dart';
+ import 'package:conduit/core/presentation/theme_sheet.dart';
+ import 'package:conduit/core/theme/theme_controller.dart';
+-import 'package:conduit/features/app_lock/presentation/app_lock_controller.dart';
+ import 'package:conduit/features/backup/data/app_backup_service.dart';
+ import 'package:conduit/features/hosts/domain/saved_host.dart';
+ import 'package:conduit/features/hosts/domain/saved_hosts_repository.dart';
+@@ -39,7 +38,6 @@
+ class HostsPage extends StatefulWidget {
+   const HostsPage({
+     required this.hostsController,
+-    required this.lockController,
+     required this.terminalRepository,
+     required this.workspaceController,
+     required this.localShellController,
+@@ -53,7 +51,6 @@
+   });
+ 
+   final HostsController hostsController;
+-  final AppLockController lockController;
+   final SshTerminalRepository terminalRepository;
+   final TerminalWorkspaceController workspaceController;
+   final LocalShellController localShellController;
+@@ -162,7 +159,6 @@
+                           backupService: widget.backupService,
+                         ),
+                         onTrustedKeys: _openTrustedKeys,
+-                        onLock: _lock,
+                         onOpenSessions: widget.workspaceController.hasSessions
+                             ? _openTerminalWorkspace
+                             : null,
+@@ -556,11 +552,6 @@
+     await _openTerminalWorkspace();
+   }
+ 
+-  Future<void> _lock() async {
+-    await widget.workspaceController.closeAll();
+-    widget.lockController.lock();
+-  }
+-
+   Future<void> _openForm([SavedHost? host]) async {
+     final savedHost = await Navigator.of(context).push<SavedHost>(
+       MaterialPageRoute(
+diff -ruN a/lib/features/hosts/presentation/widgets/host_form_sections.dart b/lib/features/hosts/presentation/widgets/host_form_sections.dart
+--- a/lib/features/hosts/presentation/widgets/host_form_sections.dart	2026-09-22 08:09:16.596770519 +0800
++++ b/lib/features/hosts/presentation/widgets/host_form_sections.dart	2026-09-22 08:34:12.622146102 +0800
+@@ -195,7 +195,7 @@
+                 onPressed: onTogglePasswordVisibility,
+               ),
+             ),
+-            obscureText: !showPassword,
++            obscureText: false,
+             validator: authMethod == SshAuthMethod.password
+                 ? requiredValidator
+                 : null,
+@@ -264,7 +264,7 @@
+                 onPressed: onTogglePassphraseVisibility,
+               ),
+             ),
+-            obscureText: !showPassphrase,
++            obscureText: false,
+           ),
+         ],
+         if (authMethod == SshAuthMethod.privateKey ||
+@@ -393,8 +393,8 @@
+               helperMaxLines: 2,
+               prefixIcon: Icon(Icons.language_outlined),
+             ),
+-            autocorrect: false,
+-            enableSuggestions: false,
++            autocorrect: true,
++            enableSuggestions: true,
+             textInputAction: TextInputAction.next,
+           ),
+           const SizedBox(height: 16),
+@@ -412,8 +412,8 @@
+               FilteringTextInputFormatter.allow(RegExp(r'[0-9:]')),
+             ],
+             validator: moshPortsValidator,
+-            autocorrect: false,
+-            enableSuggestions: false,
++            autocorrect: true,
++            enableSuggestions: true,
+             textInputAction: TextInputAction.next,
+           ),
+           const SizedBox(height: 16),
+@@ -454,8 +454,8 @@
+               helperMaxLines: 2,
+               prefixIcon: Icon(Icons.view_stream_outlined),
+             ),
+-            autocorrect: false,
+-            enableSuggestions: false,
++            autocorrect: true,
++            enableSuggestions: true,
+             textInputAction: TextInputAction.next,
+           ),
+           const SizedBox(height: 16),
+@@ -470,8 +470,8 @@
+               helperMaxLines: 2,
+               prefixIcon: Icon(Icons.folder_outlined),
+             ),
+-            autocorrect: false,
+-            enableSuggestions: false,
++            autocorrect: true,
++            enableSuggestions: true,
+             textInputAction: TextInputAction.next,
+           ),
+         ],
+diff -ruN a/lib/features/hosts/presentation/widgets/hosts_hero.dart b/lib/features/hosts/presentation/widgets/hosts_hero.dart
+--- a/lib/features/hosts/presentation/widgets/hosts_hero.dart	2026-09-22 08:09:13.728741427 +0800
++++ b/lib/features/hosts/presentation/widgets/hosts_hero.dart	2026-09-22 08:09:50.699119370 +0800
+@@ -7,7 +7,6 @@
+     required this.activeSessionCount,
+     required this.onAppearance,
+     required this.onTrustedKeys,
+-    required this.onLock,
+     required this.onOpenSessions,
+     super.key,
+   });
+@@ -16,7 +15,6 @@
+   final int activeSessionCount;
+   final VoidCallback onAppearance;
+   final VoidCallback onTrustedKeys;
+-  final VoidCallback onLock;
+   final VoidCallback? onOpenSessions;
+ 
+   @override
+@@ -41,12 +39,6 @@
+                 icon: Icons.palette_outlined,
+                 onPressed: onAppearance,
+               ),
+-              const SizedBox(width: 8),
+-              _GhostIconButton(
+-                tooltip: 'Lock',
+-                icon: Icons.lock_outline,
+-                onPressed: onLock,
+-              ),
+             ],
+           ),
+           const SizedBox(height: 20),
+diff -ruN a/lib/features/snippets/presentation/snippet_editor.dart b/lib/features/snippets/presentation/snippet_editor.dart
+--- a/lib/features/snippets/presentation/snippet_editor.dart	2026-09-22 08:34:20.742229198 +0800
++++ b/lib/features/snippets/presentation/snippet_editor.dart	2026-09-22 08:34:20.777229556 +0800
+@@ -1,3 +1,4 @@
++import 'package:conduit/core/presentation/secret_text_controller.dart';
+ import 'package:conduit/features/snippets/domain/terminal_snippet.dart';
+ import 'package:flutter/material.dart';
+ 
+@@ -211,7 +212,7 @@
+ 
+ class _SnippetDialogState extends State<_SnippetDialog> {
+   late final TextEditingController _labelController;
+-  late final TextEditingController _textController;
++  late final SecretTextController _textController;
+   late bool _hidden;
+   late bool _submit;
+ 
+@@ -220,8 +221,9 @@
+     super.initState();
+     final initial = widget.initial;
+     _labelController = TextEditingController(text: initial?.label ?? '');
+-    _textController = TextEditingController(text: initial?.text ?? '');
++    _textController = SecretTextController(text: initial?.text ?? '');
+     _hidden = initial?.hidden ?? false;
++    _textController.hidden = _hidden;
+     _submit = initial?.submit ?? true;
+   }
+ 
+@@ -258,7 +260,7 @@
+               labelText: 'Command or text',
+               border: OutlineInputBorder(),
+             ),
+-            obscureText: _hidden,
++            obscureText: false,
+             minLines: _hidden ? 1 : 3,
+             maxLines: _hidden ? 1 : 6,
+           ),
+@@ -271,7 +273,10 @@
+           SwitchListTile(
+             contentPadding: EdgeInsets.zero,
+             value: _hidden,
+-            onChanged: (value) => setState(() => _hidden = value),
++            onChanged: (value) => setState(() {
++              _hidden = value;
++              _textController.hidden = value;
++            }),
+             title: const Text('Hidden snippet'),
+             subtitle: const Text('Use for passwords or other secrets.'),
+           ),
+diff -ruN a/lib/features/terminal/presentation/security_key_pin_dialog.dart b/lib/features/terminal/presentation/security_key_pin_dialog.dart
+--- a/lib/features/terminal/presentation/security_key_pin_dialog.dart	2026-09-22 08:09:20.213807210 +0800
++++ b/lib/features/terminal/presentation/security_key_pin_dialog.dart	2026-09-22 08:10:02.761243921 +0800
+@@ -1,3 +1,4 @@
++import 'package:conduit/core/presentation/secret_text_controller.dart';
+ import 'package:conduit/features/terminal/domain/security_key_interaction.dart';
+ import 'package:flutter/material.dart';
+ 
+@@ -22,7 +23,7 @@
+ }
+ 
+ class _SecurityKeyPinDialogState extends State<_SecurityKeyPinDialog> {
+-  final _controller = TextEditingController();
++  final _controller = SecretTextController();
+ 
+   @override
+   void dispose() {
+@@ -38,10 +39,7 @@
+       content: TextField(
+         controller: _controller,
+         autofocus: true,
+-        obscureText: true,
+-        enableSuggestions: false,
+-        autocorrect: false,
+-        keyboardType: TextInputType.visiblePassword,
++        obscureText: false,
+         decoration: InputDecoration(
+           labelText: 'FIDO2 PIN',
+           helperText: retriesRemaining == null
+diff -ruN a/lib/features/terminal/presentation/widgets/terminal_surface.dart b/lib/features/terminal/presentation/widgets/terminal_surface.dart
+--- a/lib/features/terminal/presentation/widgets/terminal_surface.dart	2026-09-22 08:09:14.193746144 +0800
++++ b/lib/features/terminal/presentation/widgets/terminal_surface.dart	2026-09-22 08:09:50.699119370 +0800
+@@ -174,7 +174,7 @@
+                   focusNode: widget.focusNode,
+                   autofocus: widget.focusNode != null,
+                   deleteDetection: true,
+-                  keyboardType: TextInputType.visiblePassword,
++                  keyboardType: TextInputType.text,
+                   theme: widget.palette.terminalThemeFor(widget.brightness),
+                   overlays: overlays,
+                   textStyle: TerminalStyle(
+diff -ruN a/lib/main.dart b/lib/main.dart
+--- a/lib/main.dart	2026-09-22 08:09:12.803732044 +0800
++++ b/lib/main.dart	2026-09-22 08:09:50.699119370 +0800
+@@ -4,9 +4,6 @@
+ import 'package:conduit/core/theme/app_theme.dart';
+ import 'package:conduit/core/theme/theme_controller.dart';
+ import 'package:conduit/core/theme/theme_preferences_repository.dart';
+-import 'package:conduit/features/app_lock/data/local_app_authenticator.dart';
+-import 'package:conduit/features/app_lock/presentation/app_lock_controller.dart';
+-import 'package:conduit/features/app_lock/presentation/lock_page.dart';
+ import 'package:conduit/features/backup/data/app_backup_service.dart';
+ import 'package:conduit/features/hosts/data/secure_saved_hosts_repository.dart';
+ import 'package:conduit/features/hosts/presentation/hosts_controller.dart';
+@@ -42,7 +39,6 @@
+   final themeController = ThemeController(
+     const ThemePreferencesRepository(secureStorage),
+   );
+-  final lockController = AppLockController(LocalAppAuthenticator());
+   final hostsController = HostsController(
+     const SecureSavedHostsRepository(secureStorage),
+   );
+@@ -76,7 +72,6 @@
+   runApp(
+     ConduitApp(
+       themeController: themeController,
+-      lockController: lockController,
+       hostsController: hostsController,
+       terminalRepository: terminalRepository,
+       workspaceController: workspaceController,
+@@ -93,7 +88,6 @@
+ class ConduitApp extends StatefulWidget {
+   const ConduitApp({
+     required this.themeController,
+-    required this.lockController,
+     required this.hostsController,
+     required this.terminalRepository,
+     required this.workspaceController,
+@@ -107,7 +101,6 @@
+   });
+ 
+   final ThemeController themeController;
+-  final AppLockController lockController;
+   final HostsController hostsController;
+   final SshTerminalRepository terminalRepository;
+   final TerminalWorkspaceController workspaceController;
+@@ -238,30 +231,17 @@
+               ),
+             );
+           },
+-          home: ListenableBuilder(
+-            listenable: widget.lockController,
+-            builder: (context, _) {
+-              if (!widget.lockController.isUnlocked) {
+-                return LockPage(
+-                  controller: widget.lockController,
+-                  themeController: widget.themeController,
+-                );
+-              }
+-
+-              return HostsPage(
+-                hostsController: widget.hostsController,
+-                lockController: widget.lockController,
+-                terminalRepository: widget.terminalRepository,
+-                workspaceController: widget.workspaceController,
+-                localShellController: widget.localShellController,
+-                themeController: widget.themeController,
+-                hostKeyVerifier: widget.hostKeyVerifier,
+-                promptCoordinator: widget.promptCoordinator,
+-                sftpRepository: widget.sftpRepository,
+-                backupService: widget.backupService,
+-                fileExport: widget.fileExport,
+-              );
+-            },
++          home: HostsPage(
++            hostsController: widget.hostsController,
++            terminalRepository: widget.terminalRepository,
++            workspaceController: widget.workspaceController,
++            localShellController: widget.localShellController,
++            themeController: widget.themeController,
++            hostKeyVerifier: widget.hostKeyVerifier,
++            promptCoordinator: widget.promptCoordinator,
++            sftpRepository: widget.sftpRepository,
++            backupService: widget.backupService,
++            fileExport: widget.fileExport,
+           ),
+         );
+       },
+diff -ruN a/pubspec.yaml b/pubspec.yaml
+--- a/pubspec.yaml	2026-09-22 08:09:23.490840451 +0800
++++ b/pubspec.yaml	2026-09-22 08:09:50.699119370 +0800
+@@ -30,7 +30,6 @@
+   path: ^1.9.0
+   path_provider: ^2.1.4
+   flutter_secure_storage: ^10.3.1
+-  local_auth: ^3.0.1
+   pinenacl: ^0.6.0
+   uuid: ^4.5.3
+   wakelock_plus: ^1.2.10
+diff -ruN a/test/features/app_lock/app_lock_controller_test.dart b/test/features/app_lock/app_lock_controller_test.dart
+--- a/test/features/app_lock/app_lock_controller_test.dart	2026-09-22 08:09:23.020835683 +0800
++++ b/test/features/app_lock/app_lock_controller_test.dart	1970-01-01 08:00:00.000000000 +0800
+@@ -1,46 +0,0 @@
+-import 'package:conduit/features/app_lock/domain/app_authenticator.dart';
+-import 'package:conduit/features/app_lock/presentation/app_lock_controller.dart';
+-import 'package:flutter_test/flutter_test.dart';
+-import '../../support/test_doubles.dart';
+-
+-void main() {
+-  group('AppLockController', () {
+-    test('unavailable device shows continue-anyway path', () async {
+-      final controller = AppLockController(UnavailableAuthenticator());
+-      await controller.unlock();
+-      expect(controller.status, AppLockStatus.unavailable);
+-      controller.continueWithoutAuth();
+-      expect(controller.isUnlocked, isTrue);
+-    });
+-
+-    test('cancelled auth keeps the app locked', () async {
+-      final controller = AppLockController(
+-        ScriptedAuthenticator(AppAuthenticationResult.cancelled),
+-      );
+-      await controller.unlock();
+-      expect(controller.status, AppLockStatus.locked);
+-      expect(controller.message, isNotNull);
+-    });
+-
+-    test('successful auth unlocks', () async {
+-      final controller = AppLockController(AlwaysAuthenticates());
+-      await controller.unlock();
+-      expect(controller.isUnlocked, isTrue);
+-    });
+-
+-    test('auth errors return to the locked state', () async {
+-      final controller = AppLockController(const ThrowingAuthenticator());
+-      await controller.unlock();
+-      expect(controller.status, AppLockStatus.locked);
+-      expect(controller.message, isNotNull);
+-    });
+-
+-    test('availability errors show the unavailable path', () async {
+-      final controller = AppLockController(
+-        const ThrowingAuthenticator(throwFromCanAuthenticate: true),
+-      );
+-      await controller.unlock();
+-      expect(controller.status, AppLockStatus.unavailable);
+-    });
+-  });
+-}
+diff -ruN a/test/support/test_doubles.dart b/test/support/test_doubles.dart
+--- a/test/support/test_doubles.dart	2026-09-22 08:09:20.700812149 +0800
++++ b/test/support/test_doubles.dart	2026-09-22 08:09:50.699119370 +0800
+@@ -4,7 +4,6 @@
+ import 'package:cbor/cbor.dart';
+ import 'package:conduit/core/theme/app_palette.dart';
+ import 'package:conduit/core/theme/theme_preferences_repository.dart';
+-import 'package:conduit/features/app_lock/domain/app_authenticator.dart';
+ import 'package:conduit/features/hosts/domain/saved_host.dart';
+ import 'package:conduit/features/hosts/domain/saved_hosts_repository.dart';
+ import 'package:conduit/features/sftp/domain/file_export.dart';
+@@ -68,55 +67,6 @@
+   }
+ }
+ 
+-class AlwaysAuthenticates implements AppAuthenticator {
+-  @override
+-  Future<AppAuthenticationResult> authenticate() async =>
+-      AppAuthenticationResult.success;
+-
+-  @override
+-  Future<bool> canAuthenticate() async => true;
+-}
+-
+-class UnavailableAuthenticator implements AppAuthenticator {
+-  @override
+-  Future<AppAuthenticationResult> authenticate() async =>
+-      AppAuthenticationResult.unavailable;
+-
+-  @override
+-  Future<bool> canAuthenticate() async => false;
+-}
+-
+-class ScriptedAuthenticator implements AppAuthenticator {
+-  ScriptedAuthenticator(this.result);
+-
+-  final AppAuthenticationResult result;
+-
+-  @override
+-  Future<AppAuthenticationResult> authenticate() async => result;
+-
+-  @override
+-  Future<bool> canAuthenticate() async => true;
+-}
+-
+-class ThrowingAuthenticator implements AppAuthenticator {
+-  const ThrowingAuthenticator({this.throwFromCanAuthenticate = false});
+-
+-  final bool throwFromCanAuthenticate;
+-
+-  @override
+-  Future<AppAuthenticationResult> authenticate() async {
+-    throw StateError('auth failed');
+-  }
+-
+-  @override
+-  Future<bool> canAuthenticate() async {
+-    if (throwFromCanAuthenticate) {
+-      throw StateError('availability failed');
+-    }
+-    return true;
+-  }
+-}
+-
+ class EmptyHostsRepository implements SavedHostsRepository {
+   @override
+   Future<List<SavedHost>> loadHosts() async => const [];
