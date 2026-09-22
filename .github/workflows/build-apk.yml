@@ -223,7 +223,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.4.14-mod
-          name: "v1.4.14 私人修改版（去安全键盘 / 去锁屏）"
+          name: "v1.4.14 修改版（去安全键盘 / 去锁屏）"
           body_path: RELEASE_NOTES.md
           files: conduit/build/app/outputs/flutter-apk/app-release.apk
           make_latest: true
